@@ -185,6 +185,7 @@
 
       const projectiles = [];
       const sparks = [];
+      const audio = makeAudio();
       let camera = 0;
       let time = 0;
       let state = "title";
@@ -261,6 +262,7 @@
 
       function damagePlayer(fromX) {
         if (player.inv || player.dead) return;
+        audio.play("hurt");
         player.hp--;
         player.inv = 58;
         player.vx = fromX < player.x ? 2.4 : -2.4;
@@ -269,10 +271,14 @@
         if (player.hp <= 0) {
           player.dead = true;
           state = "over";
+          audio.stopBgm();
         }
       }
 
       function restart() {
+        audio.start();
+        audio.play("start");
+        audio.startBgm();
         Object.assign(player, {
           x: 38,
           y: 174,
@@ -335,17 +341,20 @@
         if (pressed.jump) {
           if (player.grounded) {
             player.vy = -7.1;
+            audio.play("jump");
           } else if (player.onWall) {
             player.vy = -6.5;
             player.vx = -player.onWall * 3.2;
             player.dir = -player.onWall;
             makeSpark(player.x + player.w / 2, player.y + 20, "#f7d86a");
+            audio.play("jump");
           }
         }
 
         if (pressed.attack && player.attack <= 0) {
           player.attack = 16;
           player.slash = 10;
+          audio.play("slash");
         }
 
         if (pressed.throw && player.throwCooldown <= 0) {
@@ -360,6 +369,7 @@
             life: 70
           });
           player.throwCooldown = 24;
+          audio.play("throw");
         }
 
         player.vy += player.onWall ? GRAVITY * .35 : GRAVITY;
@@ -393,6 +403,7 @@
             if (e.hp <= 0) {
               e.dead = true;
               player.score += 100;
+              audio.play("kill");
             }
           }
           if (!e.dead && rects(player, e)) damagePlayer(e.x);
@@ -416,6 +427,7 @@
               if (e.hp <= 0) {
                 e.dead = true;
                 player.score += 100;
+                audio.play("kill");
               }
             }
           }
@@ -442,14 +454,21 @@
           if (sparks[i].life <= 0) sparks.splice(i, 1);
         }
 
-        if (player.x > 2320 && boss.dead) state = "clear";
+        if (player.x > 2320 && boss.dead) {
+          state = "clear";
+          audio.stopBgm();
+          audio.play("clear");
+        }
         camera += (Math.max(0, Math.min(LEVEL_W - W, player.x - 150)) - camera) * .12;
         clearPressed();
       }
 
       function updateBoss(slashRect) {
         if (boss.dead) return;
-        boss.awake = boss.awake || player.x > 1960;
+        if (!boss.awake && player.x > 1960) {
+          boss.awake = true;
+          audio.play("boss");
+        }
         if (!boss.awake) return;
 
         boss.dir = player.x < boss.x ? -1 : 1;
@@ -498,8 +517,120 @@
       function defeatBoss() {
         boss.dead = true;
         player.score += 1000;
+        audio.play("bossDown");
         makeSpark(boss.x + 22, boss.y + 24, "#f7d86a");
         makeSpark(boss.x + 18, boss.y + 34, "#b9f2ff");
+      }
+
+      function makeAudio() {
+        let ac = null;
+        let master = null;
+        let bgmTimer = null;
+        let step = 0;
+        const melody = [220, 277, 330, 277, 247, 294, 370, 294, 196, 247, 294, 247, 220, 262, 330, 392];
+        const bass = [110, 110, 98, 98, 123, 123, 82, 82];
+
+        function start() {
+          if (!ac) {
+            ac = new (window.AudioContext || window.webkitAudioContext)();
+            master = ac.createGain();
+            master.gain.value = 0.18;
+            master.connect(ac.destination);
+          }
+          if (ac.state === "suspended") ac.resume();
+        }
+
+        function tone(freq, dur, type, gainValue, bend) {
+          if (!ac) return;
+          const t = ac.currentTime;
+          const osc = ac.createOscillator();
+          const gain = ac.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(freq, t);
+          if (bend) osc.frequency.exponentialRampToValueAtTime(Math.max(30, freq * bend), t + dur);
+          gain.gain.setValueAtTime(0.0001, t);
+          gain.gain.exponentialRampToValueAtTime(gainValue, t + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          osc.connect(gain);
+          gain.connect(master);
+          osc.start(t);
+          osc.stop(t + dur + 0.02);
+        }
+
+        function noise(dur, gainValue) {
+          if (!ac) return;
+          const size = Math.max(1, Math.floor(ac.sampleRate * dur));
+          const buffer = ac.createBuffer(1, size, ac.sampleRate);
+          const data = buffer.getChannelData(0);
+          for (let i = 0; i < size; i++) data[i] = Math.random() * 2 - 1;
+          const src = ac.createBufferSource();
+          const filter = ac.createBiquadFilter();
+          const gain = ac.createGain();
+          filter.type = "highpass";
+          filter.frequency.value = 1200;
+          gain.gain.setValueAtTime(gainValue, ac.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + dur);
+          src.buffer = buffer;
+          src.connect(filter);
+          filter.connect(gain);
+          gain.connect(master);
+          src.start();
+          src.stop(ac.currentTime + dur);
+        }
+
+        function play(name) {
+          if (!ac) return;
+          if (name === "start") {
+            tone(330, .08, "square", .12, 1.25);
+            setTimeout(() => tone(440, .12, "square", .12, 1.2), 70);
+          } else if (name === "jump") {
+            tone(260, .13, "square", .11, 1.9);
+          } else if (name === "slash") {
+            noise(.08, .12);
+            tone(740, .07, "sawtooth", .08, .55);
+          } else if (name === "throw") {
+            tone(980, .05, "square", .07, .72);
+            tone(1320, .04, "triangle", .05, .75);
+          } else if (name === "hurt") {
+            noise(.18, .15);
+            tone(180, .18, "sawtooth", .12, .55);
+          } else if (name === "kill") {
+            tone(620, .08, "square", .1, 1.4);
+            setTimeout(() => tone(930, .09, "square", .08, 1.25), 55);
+          } else if (name === "boss") {
+            tone(92, .45, "sawtooth", .16, .65);
+            setTimeout(() => noise(.2, .12), 120);
+          } else if (name === "bossDown") {
+            tone(330, .14, "square", .14, .7);
+            setTimeout(() => tone(247, .18, "square", .13, .7), 90);
+            setTimeout(() => tone(165, .28, "sawtooth", .13, .5), 210);
+            setTimeout(() => noise(.35, .14), 180);
+          } else if (name === "clear") {
+            [392, 494, 587, 784].forEach((f, i) => setTimeout(() => tone(f, .14, "square", .11, 1), i * 95));
+          }
+        }
+
+        function startBgm() {
+          if (!ac || bgmTimer) return;
+          step = 0;
+          bgmTimer = setInterval(() => {
+            if (!ac || ac.state !== "running") return;
+            const lead = melody[step % melody.length];
+            tone(lead, .1, "square", .035, 1);
+            if (step % 2 === 0) tone(bass[(step / 2) % bass.length], .16, "triangle", .045, 1);
+            if (step % 4 === 2) noise(.035, .035);
+            step++;
+          }, 145);
+        }
+
+        function stopBgm() {
+          if (bgmTimer) {
+            clearInterval(bgmTimer);
+            bgmTimer = null;
+          }
+        }
+
+        return { start, play, startBgm, stopBgm };
       }
 
       function drawRect(x, y, w, h, c) {
@@ -779,6 +910,7 @@
       window.addEventListener("keydown", (e) => {
         const k = map[e.code];
         if (!k) return;
+        audio.start();
         if (!keys[k]) pressed[k] = true;
         keys[k] = true;
         if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space"].includes(e.code)) e.preventDefault();
